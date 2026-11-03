@@ -1,5 +1,7 @@
 """Cliente REST de la API de Gemini (multimodal)."""
 import base64
+import time
+
 import requests
 
 ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
@@ -28,17 +30,25 @@ class GeminiClient:
             "contents": [{"role": "user", "parts": parts}],
             "generationConfig": {"temperature": 0.2},
         }
-        try:
-            r = requests.post(
-                ENDPOINT.format(model=self.model),
-                headers={"x-goog-api-key": self.api_key},
-                json=body,
-                timeout=55,
-            )
-        except requests.RequestException as e:
-            raise GeminiError(f"Error de red con Gemini: {e}")
+        r = None
+        for attempt in range(3):  # reintenta ante sobrecarga temporal (500/502/503/504)
+            try:
+                r = requests.post(
+                    ENDPOINT.format(model=self.model),
+                    headers={"x-goog-api-key": self.api_key},
+                    json=body,
+                    timeout=40,
+                )
+            except requests.RequestException as e:
+                raise GeminiError(f"Error de red con Gemini: {e}")
+            if r.status_code not in (500, 502, 503, 504):
+                break
+            if attempt < 2:
+                time.sleep(2 * (attempt + 1))
         if r.status_code == 429:
             raise GeminiError("Se alcanzó el límite del nivel gratuito de Gemini. Probá en unos minutos.")
+        if r.status_code == 503:
+            raise GeminiError("Gemini está saturado en este momento. Probá de nuevo en un minuto.")
         if r.status_code != 200:
             raise GeminiError(f"Gemini devolvió {r.status_code}: {r.text[:200]}")
         try:
